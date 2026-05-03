@@ -99,6 +99,27 @@ npm run import:legacy
 
 Uses `scripts/import-legacy-csv.ts` (UTF-8 CSV, header row required).
 
+### School export format (your `Students_List.csv` + `Struck Off List.csv`)
+
+Headers (exact labels from export):
+
+`Sr.No, Gr.No, Student Name, Father Name, Class, Section, Cell No`
+
+- **Gr.No** → admission number
+- **Student / Father** → student & parent names (Father stored as parent / guardian)
+- **Class / Section** → grade & section
+- **Cell No** → parent phone (first number if several are separated by `-` / `/`)
+- Student login phone in DB is synthetic: `stu-{slug}-{Gr.No}` (avoids breaking `@@unique([school_id, phone])` when siblings share one number)
+- **Struck off** file: import **after** the active list. Same columns. Marks matching students as inactive (`User.is_active = false`). Rows only in struck-off are created already inactive.
+
+```bash
+npm run import:school-export -- --school-slug your-school-slug --school-name "Your School Name" --active "C:\path\Students_List.csv" --struck-off "C:\path\Struck Off List.csv"
+```
+
+Optional in `.env.local`: `IMPORT_SCHOOL_SLUG`, `IMPORT_SCHOOL_NAME`, `IMPORT_ACTIVE_CSV`, `IMPORT_STRUCK_OFF_CSV`.
+
+Run **active first**, then **struck-off** (single command above does both in order).
+
 ---
 
 ## 6) OpenClaw
