@@ -71,6 +71,10 @@ COMMUNICATION:
 - In-app notification: Always
 - Email: Secondary (educated parents only)
 - Quiet hours: No alerts 10pm–7am (configurable)
+- OpenClaw + WhatsApp (Section 16.6): Parents ghar baithe school number par Roman Urdu/Urdu/English
+  se sawal (result, fee, diary) aur shikayat bhej sakte hain. Principal / admin
+  agent se NL sawal (aaj ki cash collection, lesson planning delays, teacher trends)
+  po sakte hain — agent sirf authorized tools se DB read karta hai.
 
 DEVICE REALITY:
 - Many parents have basic Android phones
@@ -1709,6 +1713,10 @@ AUDIT LOGS:
 GET    /audit-logs (search + filter — admin only)
 GET    /audit-logs/entity/:entityType/:entityId (history of specific record)
 POST   /audit-logs/export (export audit trail — super admin only)
+
+WEBHOOKS & AGENT BRIDGE (Section 16.6):
+POST   /webhooks/whatsapp (inbound WhatsApp → resolve user → OpenClaw session → reply)
+POST   /internal/openclaw/tool-invoke (HMAC / mTLS — OpenClaw tools → Prisma read/write per policy)
 ```
 
 ---
@@ -1907,6 +1915,7 @@ PHASE 8 — MOBILE + SCALE:
 [ ] M37 — Payment Gateway (full JazzCash + EasyPaisa integration)
 [ ] M38 — Mobile App (React Native — all modules)
 [ ] M39 — Pod Leader System
+[ ] M40 — WhatsApp + OpenClaw "School Ops Agent" (parents: results/fee/complaints NL; staff: fee/planning/trends NL — Section 16.6)
 ```
 
 CROSS-CUTTING (built into EVERY module from day 1 — NOT separate):
@@ -1950,6 +1959,7 @@ Parents can reply to alerts directly via WhatsApp.
 System reads WhatsApp reply and updates accordingly.
 Example: Alert says "Ali inactive 3 days — reply OK to confirm you know"
 Parent replies "OK" on WhatsApp → system logs acknowledgment.
+**Extended (Section 16.6):** Full conversational agent (OpenClaw) on same number — results, fee, diary, complaints, leave — plus staff NL analytics (fee/planning/trends) with strict permissions.
 
 ### Teacher Substitute System:
 
@@ -2383,6 +2393,74 @@ NEXT.js (apps/web)     Express (apps/api)        Expo (apps/mobile)
 ### 16.5 Build order note
 
 - Wire OpenClaw after **M01 Auth** and first **Express** routes stable; pilot with **one** agent (e.g. Alert / Content Review) before Exam Paper complexity.
+
+### 16.6 WhatsApp + OpenClaw — ghar baithe parents aur idaron ke liye conversational ops
+
+**Product goal:** Parents **WhatsApp** ke zariye hi zyada tar kam kar saken (app kholne ki zaroorat kam). School ka **WhatsApp Business** number OpenClaw-backed agent se jura ho ta ke **natural language** (Urdu / Roman Urdu / English) queries samajh kar **authorized data** aur **actions** ho saken. Principal / coordinator **apne phone se** bhi agent se operational sawal kar saken — trends aur facts DB se (tools), **decisions** insaan leta hai.
+
+#### 16.6.1 Parent-facing flows (read-heavy + safe actions)
+
+Inbound message school number par → WhatsApp webhook → **Express** validates sender phone against **Parent** / **User** → OpenClaw session scoped to `school_id` + parent.
+
+Examples (agent intent → tool calls → short Urdu/English reply on WhatsApp):
+
+| Parent says (examples)                                 | Agent behavior                                                                                     |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| "Meray bachay ka result?" / "Ali ki report check karo" | Tool: `get_student_results` for children linked to this phone only                                 |
+| "Fee kitni baqi hai?" / "Challan kab due hai?"         | Tool: `get_fee_status` — own children only                                                         |
+| "Aaj diary mein kya likha?"                            | Tool: `get_diary_today` for child's section                                                        |
+| "Shikayat — teacher ne zyada homework de diya"         | Tool: `file_complaint` — creates **Complaint** row, category + text, **audit log**; SLA auto-timer |
+| "Bachay ki chutti ke liye request"                     | Tool: `apply_student_leave` or deep-link to app if policy requires                                 |
+
+**Rules:**
+
+- **Never** return another student's data. Phone → `User` → `Parent` → `children[]` only.
+- **Simple mode** parents: replies **short simple Urdu**, no jargon.
+- **Quiet hours:** acknowledge but defer non-urgent detail until 7am if policy says so (configurable).
+- All outbound answers **logged** (SMSLog / WhatsApp meta) without sensitive payloads in plain text logs.
+
+#### 16.6.2 Staff / Principal / Admin flows (analytics & compliance)
+
+Same WhatsApp number **or** internal staff channel; sender must map to **Staff** role with permissions. OpenClaw agent uses **read tools** that enforce `checkPermission` server-side.
+
+Examples:
+
+| Admin says (examples)                                | Agent behavior                                                                                                                                                         |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Aaj ki fee collection cash kitni hoi?"              | Tool: `report_fee_collection` — filters `method=CASH`, `date=today`, `school_id`                                                                                       |
+| "Kon si teacher ki lesson planning abhi ready nahi?" | Tool: `report_planning_missing` — teachers with overdue / empty planner rows for current week                                                                          |
+| "Kon si teacher aksar late planning karti hai?"      | Tool: `report_planning_trends` — aggregated metric (e.g. % on-time vs late submissions over N weeks); **no public shaming text** — factual summary for leadership only |
+| "Grade 5 ki attendance percentage is haftay?"        | Tool: `report_attendance_summary` with grade filter                                                                                                                    |
+
+**Rules:**
+
+- **Teacher effectiveness** style answers: only roles with `report:teacher_performance` (Section 5).
+- **Trends** = aggregated reports; agent **does not** invent numbers — every figure from Prisma / `ReportSnapshot`.
+- **Write actions** (approve discount, change marks) **not** allowed via casual NL on WhatsApp; agent can **draft** or **route to dashboard** with link.
+
+#### 16.6.3 Architecture (high level)
+
+```
+WhatsApp Cloud API → apps/api webhook (/v1/webhooks/whatsapp)
+       → verify signature, resolve school + user
+       → OpenClaw: session + run with parent|staff context
+       → Tools = HTTP POST to internal Express routes (Zod validated)
+       → Reply text/media back via WhatsApp send API
+```
+
+- **OpenClaw** holds conversation state, tool loop, Urdu tone; **Express** holds truth and permissions.
+- **Rate limits** per phone; **abuse** patterns → block + notify admin.
+
+#### 16.6.4 Complaints specifically
+
+- Complaints via WhatsApp = first-class channel alongside app.
+- Agent extracts: category, free-text, optional `against_id` if parent names clearly; always **human-readable confirmation** in Urdu: "Aap ki shikayat darj ho gayi, number #12345".
+- Tie-in to Section 8 **Complaint SLA** (24h ack, 72h resolve).
+
+#### 16.6.5 Build order
+
+- Implement after **M07** (WhatsApp pipe stable), **M08–M11** (fee tools), **M10** reports for admin NL, and **M12+** (academic tools for results).
+- Track as **M40** (Phase 8) or pilot earlier on sandbox number once M07 + Express auth exist.
 
 ---
 
