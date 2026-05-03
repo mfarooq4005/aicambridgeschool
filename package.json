@@ -10,6 +10,9 @@
     "web": "npm run dev --workspace=web",
     "web:build": "npm run build --workspace=web",
     "web:start": "npm run start --workspace=web",
+    "api": "npm run dev --workspace=api",
+    "api:build": "npm run build --workspace=api",
+    "api:start": "npm run start --workspace=api",
     "lint": "npm run lint --workspaces --if-present",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,css,md}\"",
     "prepare": "husky"

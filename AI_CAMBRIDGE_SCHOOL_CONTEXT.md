@@ -1,4 +1,5 @@
 # AI Cambridge School — Master Project Context
+
 > This file is the single source of truth for the AI Cambridge School platform.
 > Read this COMPLETELY before writing any code.
 > Every decision, every rule, every database field is defined here.
@@ -23,6 +24,7 @@ Manages every school operation: admissions, fee collection, exam management, sta
 AI-powered personalized learning: self-paced credits, gamification, AI tutor (Claude), online classes, parent monitoring dashboard, student home access.
 
 ### Why Integration Matters:
+
 - Student with 2 months unpaid fee → online access AUTO-SUSPENDED
 - Student absent from school → lesson available at home via app
 - Exam result entered → report card AUTO-GENERATED → parent notified instantly
@@ -117,14 +119,21 @@ DATABASE & INFRASTRUCTURE:
 AI:
 - Anthropic Claude API (primary — claude-sonnet-4-5)
 - OpenRouter API (cost routing — claude-haiku-4-5 for simple tasks)
-- All AI calls go through /api/ai/ route — never direct from client
+- OpenClaw — agent Gateway for long-running / tool-using agents (`@openclaw/sdk` talks to Gateway HTTP API)
+- All AI calls go through backend (Express) or Next.js BFF `/api/*` — never expose provider keys to mobile/web clients
 
-HOSTING:
-- Vercel — Next.js frontend
-- Railway.app — Express backend
-- Supabase — database + storage
+HOSTING (split — REQUIRED for mobile + scale):
+- Vercel (or similar) — Next.js frontend ONLY (UI + thin BFF if needed)
+- Railway.app (or similar) — Express backend API (canonical REST for web + mobile)
+- Supabase — database + storage + Auth (sessions can be validated by API)
+- OpenClaw Gateway — separate process/host; backend calls it with scoped tokens
 - Cloudflare — CDN + DNS + DDoS protection
 - Upstash — Redis
+
+ARCHITECTURE RULE:
+- Web app (`apps/web`) and REST API (`apps/api`) are separate deployables and separate origins.
+- Mobile (Expo) talks ONLY to `NEXT_PUBLIC_API_URL` (Express), never to internal OpenClaw or Claude keys.
+- Next.js `app/api/*` may proxy or validate cookies for SSR; business logic + Prisma + OpenClaw live in Express for parity with mobile.
 
 EXTERNAL SERVICES:
 - WhatsApp Business API (360dialog or official)
@@ -148,7 +157,7 @@ DEVELOPMENT:
 ```
 ai-cambridge-school/
 ├── apps/
-│   ├── web/                    # Next.js 14 web app
+│   ├── web/                    # Next.js 14 — UI + optional thin BFF (no provider secrets in browser)
 │   │   ├── app/
 │   │   │   ├── (auth)/         # Login, register pages
 │   │   │   ├── (admin)/        # Admin dashboard
@@ -156,7 +165,7 @@ ai-cambridge-school/
 │   │   │   ├── (teacher)/      # Teacher portal
 │   │   │   ├── (student)/      # Student portal
 │   │   │   ├── (parent)/       # Parent portal
-│   │   │   └── api/            # API routes
+│   │   │   └── api/            # Route handlers — prefer delegating to apps/api
 │   │   ├── components/
 │   │   │   ├── ui/             # shadcn components
 │   │   │   ├── shared/         # Shared across portals
@@ -166,14 +175,22 @@ ai-cambridge-school/
 │   │   │   ├── student/        # Student-specific
 │   │   │   └── parent/         # Parent-specific
 │   │   └── lib/
-│   │       ├── auth/           # NextAuth config
-│   │       ├── db/             # Prisma client
-│   │       ├── ai/             # Claude agents
-│   │       ├── payments/       # JazzCash + EasyPaisa
-│   │       ├── reports/        # Report generation (PDF, Excel, WhatsApp)
+│   │       ├── auth/           # Supabase / session helpers for SSR
+│   │       ├── db/             # Prisma only if BFF needs it; canonical DB access = apps/api
+│   │       ├── ai/             # Call Express `/v1/ai/*` — do not embed Claude/OpenClaw keys
+│   │       ├── payments/       # UI-only; secrets stay on Express
+│   │       ├── reports/        # Report generation (PDF, Excel, WhatsApp) via API
 │   │       └── utils/
 │   │
-│   └── mobile/                 # React Native Expo app
+│   ├── api/                    # Express REST — canonical backend for web + mobile + OpenClaw callbacks
+│   │   ├── src/
+│   │   │   ├── routes/         # /v1/* per Section 9
+│   │   │   ├── middleware/
+│   │   │   ├── lib/            # prisma, openclaw client, redis
+│   │   │   └── index.ts
+│   │   └── package.json
+│   │
+│   └── mobile/                 # React Native Expo — HTTP calls to `apps/api` only
 │       ├── app/                # Expo Router pages
 │       ├── components/
 │       ├── lib/
@@ -188,7 +205,8 @@ ai-cambridge-school/
 │   └── config/                 # Shared config
 │
 └── services/
-    ├── ai-agents/              # Claude agent services
+    ├── ai-agents/              # Claude-focused helpers (optional; OpenClaw may supersede some)
+    ├── openclaw/               # OpenClaw Gateway integration notes, plugins config, runbooks
     ├── notifications/          # WhatsApp + SMS + Push
     └── jobs/                   # BullMQ background jobs
 ```
@@ -198,6 +216,7 @@ ai-cambridge-school/
 ## 5. USER ROLES & PERMISSIONS
 
 ### All Roles:
+
 ```
 SUPER_ADMIN    → Platform owner (you) — full access to everything
 SCHOOL_ADMIN   → Branch manager — full access to their school only
@@ -214,6 +233,7 @@ PARENT         → Own children only
 ```
 
 ### Permission Matrix (implement as middleware):
+
 ```typescript
 const PERMISSIONS = {
   // Fee Management
@@ -227,7 +247,15 @@ const PERMISSIONS = {
   'exam:paper:generate': ['COORDINATOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
   'exam:paper:approve': ['COORDINATOR', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
   'exam:result:enter': ['SUBJECT_TEACHER', 'CLASS_TEACHER', 'COORDINATOR'],
-  'exam:result:view': ['STUDENT', 'PARENT', 'TEACHER', 'COORDINATOR', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
+  'exam:result:view': [
+    'STUDENT',
+    'PARENT',
+    'TEACHER',
+    'COORDINATOR',
+    'PRINCIPAL',
+    'SCHOOL_ADMIN',
+    'SUPER_ADMIN',
+  ],
 
   // Student Management
   'student:view_all': ['SUPER_ADMIN', 'SCHOOL_ADMIN', 'PRINCIPAL', 'COORDINATOR'],
@@ -253,7 +281,14 @@ const PERMISSIONS = {
 
   // Student Diary
   'diary:create': ['SUBJECT_TEACHER', 'CLASS_TEACHER'],
-  'diary:view_section': ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'COORDINATOR', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
+  'diary:view_section': [
+    'CLASS_TEACHER',
+    'SUBJECT_TEACHER',
+    'COORDINATOR',
+    'PRINCIPAL',
+    'SCHOOL_ADMIN',
+    'SUPER_ADMIN',
+  ],
   'diary:view_own': ['STUDENT', 'PARENT'],
 
   // Report Card
@@ -269,7 +304,14 @@ const PERMISSIONS = {
   // Class Tests
   'classtest:create': ['SUBJECT_TEACHER', 'CLASS_TEACHER'],
   'classtest:enter_marks': ['SUBJECT_TEACHER', 'CLASS_TEACHER'],
-  'classtest:view_section': ['CLASS_TEACHER', 'SUBJECT_TEACHER', 'COORDINATOR', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
+  'classtest:view_section': [
+    'CLASS_TEACHER',
+    'SUBJECT_TEACHER',
+    'COORDINATOR',
+    'PRINCIPAL',
+    'SCHOOL_ADMIN',
+    'SUPER_ADMIN',
+  ],
   'classtest:view_own': ['STUDENT', 'PARENT'],
 
   // Assignments / Homework
@@ -281,12 +323,26 @@ const PERMISSIONS = {
   // Student Leave
   'leave:apply': ['PARENT'],
   'leave:approve': ['CLASS_TEACHER', 'COORDINATOR', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
-  'leave:view_section': ['CLASS_TEACHER', 'COORDINATOR', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
+  'leave:view_section': [
+    'CLASS_TEACHER',
+    'COORDINATOR',
+    'PRINCIPAL',
+    'SCHOOL_ADMIN',
+    'SUPER_ADMIN',
+  ],
 
   // PTM
   'ptm:schedule': ['SCHOOL_ADMIN', 'PRINCIPAL', 'SUPER_ADMIN'],
   'ptm:book_slot': ['PARENT'],
-  'ptm:view': ['PARENT', 'CLASS_TEACHER', 'SUBJECT_TEACHER', 'COORDINATOR', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
+  'ptm:view': [
+    'PARENT',
+    'CLASS_TEACHER',
+    'SUBJECT_TEACHER',
+    'COORDINATOR',
+    'PRINCIPAL',
+    'SCHOOL_ADMIN',
+    'SUPER_ADMIN',
+  ],
 
   // Promotion
   'promotion:process': ['PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
@@ -299,10 +355,23 @@ const PERMISSIONS = {
   'report:academic:all': ['COORDINATOR', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
   'report:academic:section': ['CLASS_TEACHER', 'SUBJECT_TEACHER'],
   'report:teacher_performance': ['PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
-  'report:parent_engagement': ['CLASS_TEACHER', 'COORDINATOR', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
+  'report:parent_engagement': [
+    'CLASS_TEACHER',
+    'COORDINATOR',
+    'PRINCIPAL',
+    'SCHOOL_ADMIN',
+    'SUPER_ADMIN',
+  ],
   'report:multi_branch': ['SUPER_ADMIN'],
   'report:own_children': ['PARENT'],
-  'report:export_pdf': ['CLASS_TEACHER', 'COORDINATOR', 'ACCOUNTANT', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
+  'report:export_pdf': [
+    'CLASS_TEACHER',
+    'COORDINATOR',
+    'ACCOUNTANT',
+    'PRINCIPAL',
+    'SCHOOL_ADMIN',
+    'SUPER_ADMIN',
+  ],
   'report:export_excel': ['COORDINATOR', 'ACCOUNTANT', 'PRINCIPAL', 'SCHOOL_ADMIN', 'SUPER_ADMIN'],
 
   // Audit Logs
@@ -316,7 +385,7 @@ const PERMISSIONS = {
   // Academic Calendar
   'calendar:manage': ['SCHOOL_ADMIN', 'PRINCIPAL', 'SUPER_ADMIN'],
   'calendar:view': ['ALL_ROLES'],
-}
+};
 ```
 
 ---
@@ -324,6 +393,7 @@ const PERMISSIONS = {
 ## 6. DATABASE SCHEMA (COMPLETE)
 
 ### Multi-Tenancy Rule:
+
 Every table that belongs to a school MUST have `school_id` field.
 Supabase RLS policy enforces: users can only see rows where `school_id` matches their school.
 
@@ -1258,7 +1328,10 @@ model ReportSnapshot {
 ## 7. AI AGENTS — IMPLEMENTATION GUIDE
 
 ### Architecture:
+
 All AI calls are server-side only. Never call Claude API from client/browser.
+
+**OpenClaw (agent platform):** Long-running agents, tool runs, approvals, and session streams go through an **OpenClaw Gateway** from **`apps/api`** using `@openclaw/sdk` (or HTTP RPC to the Gateway). The six domain agents below can be implemented as **OpenClaw agent configs + tools** that call Prisma-backed Express routes, OR as direct Claude calls where OpenClaw is not needed. Default rule: **orchestration and anything with tools / approvals → OpenClaw**; simple one-shot LLM calls → Express + Anthropic/OpenRouter. Never expose Gateway tokens or model keys to Next.js client or mobile app.
 
 ```typescript
 // /services/ai-agents/base-agent.ts
@@ -1278,10 +1351,11 @@ interface AgentConfig {
 ```
 
 ### Agent 1 — Exam Paper Agent:
+
 ```typescript
 // Trigger: Coordinator clicks "Generate Paper"
 // Input: grade, subject, chapters[], examType, totalMarks, duration, difficulty
-// Process: 
+// Process:
 //   1. Fetch SyllabusContent for selected chapters
 //   2. Send to Claude Sonnet with structured prompt
 //   3. Claude returns JSON: {sections, questions, answerKey, sloMap}
@@ -1291,6 +1365,7 @@ interface AgentConfig {
 ```
 
 ### Agent 2 — AI Tutor Agent:
+
 ```typescript
 // Trigger: Student clicks "Ask AI" on any lesson
 // Rules:
@@ -1303,6 +1378,7 @@ interface AgentConfig {
 ```
 
 ### Agent 3 — Alert Agent:
+
 ```typescript
 // Trigger: BullMQ job runs every night at midnight
 // Checks:
@@ -1317,6 +1393,7 @@ interface AgentConfig {
 ```
 
 ### Agent 4 — Content Review Agent:
+
 ```typescript
 // Trigger: Teacher uploads any content (video, PDF, quiz)
 // Checks: SLO alignment, age-appropriate, factual accuracy
@@ -1326,6 +1403,7 @@ interface AgentConfig {
 ```
 
 ### Agent 5 — Progress Analyst:
+
 ```typescript
 // Trigger: Every Sunday midnight via BullMQ
 // Per student: analyze week's credits, quiz scores, attendance
@@ -1336,6 +1414,7 @@ interface AgentConfig {
 ```
 
 ### Agent 6 — Syllabus Planner:
+
 ```typescript
 // Trigger: Academic year setup OR holiday added
 // Input: Total working days, holidays, chapters per subject
@@ -1754,7 +1833,14 @@ ENCRYPTION_KEY=  # AES-256 — 32 bytes
 JWT_SECRET=
 
 # App
-NEXT_PUBLIC_APP_URL=
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+# Canonical REST API (Express) — web + mobile (set in Vercel + Expo env)
+NEXT_PUBLIC_API_URL=http://localhost:4000
+
+# OpenClaw Gateway (API + workers only — never NEXT_PUBLIC_*)
+OPENCLAW_GATEWAY_URL=http://localhost:18789
+OPENCLAW_GATEWAY_TOKEN=
+
 APP_ENV=development # development | staging | production
 ```
 
@@ -1768,7 +1854,7 @@ Audit logs are active from Module 01 — every write operation is logged.
 
 ```
 PHASE 1 — FOUNDATION + DAILY OPERATIONS (Weeks 1-4):
-[ ] M01 — Auth & Users (OTP login, roles, permissions middleware, audit log system)
+[ ] M01 — Auth & Users + **Express API shell** (`apps/api` /v1 health, CORS); OTP login, roles, permissions middleware, audit log system
 [ ] M02 — School Configuration (profile, grades, sections, academic calendar, timetable)
 [ ] M03 — Report Infrastructure (ReportSnapshot model, PDF/Excel export utils, chart components)
 [ ] M04 — Student Management (enrollment, records, profiles, admissions)
@@ -1824,6 +1910,7 @@ PHASE 8 — MOBILE + SCALE:
 ```
 
 CROSS-CUTTING (built into EVERY module from day 1 — NOT separate):
+
 - Audit Logs: Every create/update/delete logged permanently
 - Reports: Each module ships with its reports
 - Parent view: Every module has parent-facing view + notification
@@ -1834,24 +1921,10 @@ CROSS-CUTTING (built into EVERY module from day 1 — NOT separate):
 
 ---
 
-## HOW TO USE THIS FILE IN CURSOR
-
-When starting any new module, begin your Cursor prompt with:
-
-```
-"Read AI_CAMBRIDGE_SCHOOL_CONTEXT.md completely.
-Now build [MODULE NAME] following all rules defined there.
-Specifically: [your specific instructions for this module]"
-```
-
-This file is your contract. Every feature must align with it.
-If something is unclear — ask before coding.
-
----
-
 ## 13. MISSING REQUIREMENTS — ADDED FROM REVIEW
 
 ### Gamification — Brain Storming Games:
+
 After every 1-2 physical classes, students are shown brain-storming games
 related to the topic just taught. Purpose: reinforce concepts immediately
 while student is still in school OR just arrived home.
@@ -1864,6 +1937,7 @@ Class ends → Student opens app →
 ```
 
 ### Pod Leader System (Phase 2):
+
 For online students in remote cities where no physical school exists.
 A trusted local person (retired teacher / educated parent) becomes Pod Leader.
 20-30 online students gather at Pod Leader's location.
@@ -1871,24 +1945,29 @@ AI Cambridge School's online class plays on screen.
 Pod Leader supervises — gets free education for own child + small stipend.
 
 ### Parent WhatsApp Reply (without opening app):
+
 Parents can reply to alerts directly via WhatsApp.
 System reads WhatsApp reply and updates accordingly.
 Example: Alert says "Ali inactive 3 days — reply OK to confirm you know"
 Parent replies "OK" on WhatsApp → system logs acknowledgment.
 
 ### Teacher Substitute System:
+
 When teacher marks absent:
+
 1. System immediately notifies class students/parents
 2. Admin gets notification to arrange substitute
 3. If substitute assigned → students notified
 4. If no substitute → lesson from content library auto-assigned
 
 ### Library Fine → Fee Challan Integration:
+
 Library overdue fines are NOT collected separately.
 They are automatically added to the student's next monthly fee challan.
 Same for lost book replacement cost.
 
 ### Device Policy by Grade (HARD RULES):
+
 ```
 Nursery-KG:    Zero personal device. LCD in class only.
 Grade 1-2:     School tab in class only. 20 min/day max.
@@ -1898,6 +1977,7 @@ Grade 7+:      Laptop preferred. Advanced monitoring.
 ```
 
 ### Parent Agreement — Digital Signature:
+
 When student assigned personal tab (Grade 5+):
 Parent must digitally sign Tab Usage Agreement in app.
 Agreement includes: Family Link install, screen time limits,
@@ -1905,6 +1985,7 @@ bedroom restriction, monthly report sharing.
 Tab NOT activated until agreement signed.
 
 ### Revenue Model — Online Teachers:
+
 ```
 Monthly subscription fee collected by platform
 Split: Teacher 50% | Platform 40% | Operations 10%
@@ -1914,6 +1995,7 @@ Pod Leader: Free education for child + PKR stipend (when revenue starts)
 ```
 
 ### Academic Results — Pass/Fail Rules (Pakistan Board):
+
 ```
 Overall: Below 40% = FAIL (repeat grade)
 Any single subject: Below 33% = COMPARTMENT
@@ -1923,6 +2005,7 @@ Compartment: Can appear in supplementary exam
 ```
 
 ### Complaint Categories (Expanded):
+
 ```
 STUDENT can complain about:
   - Teacher behavior / teaching quality
@@ -1965,7 +2048,7 @@ DAILY ATTENDANCE SUMMARY:
 
 CONSECUTIVE ABSENCE TRACKER:
 - Students absent 3+ consecutive days → Yellow flag
-- Students absent 7+ consecutive days → Orange flag  
+- Students absent 7+ consecutive days → Orange flag
 - Students absent 14+ consecutive days → Red flag
 - List view with filters (grade, section, flag color)
 - One-click: send alert to parent from this report
@@ -1995,7 +2078,7 @@ GRADE vs GRADE COMPARISON:
 
 STAFF ATTENDANCE REPORT:
 - Teacher-wise: present, absent, late, on-leave count
-- Monthly summary with % 
+- Monthly summary with %
 - Leave balance remaining
 - Substitute teacher assignments
 
@@ -2213,7 +2296,7 @@ SOLUTION: ReportSnapshot model (pre-computed data)
 
 SNAPSHOT TYPES:
 - ATTENDANCE_DAILY: per section totals for each day
-- ATTENDANCE_MONTHLY: per student monthly % 
+- ATTENDANCE_MONTHLY: per student monthly %
 - FEE_DAILY: daily collection totals
 - FEE_MONTHLY: monthly collection vs expected
 - ACADEMIC_TERMLY: per exam aggregate results
@@ -2225,3 +2308,93 @@ RETENTION:
 - Monthly snapshots: keep forever
 - Raw data: keep forever (audit requirement)
 ```
+
+---
+
+## 15. DEPLOYMENT — SPLIT FRONTEND / BACKEND (MOBILE-READY)
+
+### 15.1 Why two servers
+
+```
+NEXT.js (apps/web)     Express (apps/api)        Expo (apps/mobile)
+      |                      |                          |
+      |    HTTPS JSON        |    same /v1/* REST       |
+      +---------------------->+-------------------------+
+                             |
+                        PostgreSQL (Supabase)
+                             |
+                     OpenClaw Gateway (optional host)
+```
+
+- **One REST API** (`apps/api`) is the **single contract** for browsers and mobile. Same URLs, same auth model, same validation.
+- **Next.js** delivers UI and SSR; it may call `NEXT_PUBLIC_API_URL` from Server Components or use fetch from the browser with cookies/JWT as designed in M01.
+- **Never** put `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, or `OPENCLAW_GATEWAY_TOKEN` in `NEXT_PUBLIC_*` or mobile env.
+
+### 15.2 CORS & cookies
+
+- API enables **CORS** for known origins: production `NEXT_PUBLIC_APP_URL`, Expo dev server, and app deep links if needed.
+- Prefer **Authorization: Bearer** access tokens issued after Supabase or custom auth validated by **Express** (mobile-friendly). Cookie-only sessions are harder for native apps.
+
+### 15.3 Route ownership
+
+| Concern                    | Owner                                 | Notes                            |
+| -------------------------- | ------------------------------------- | -------------------------------- |
+| HTML, layouts, dashboards  | `apps/web`                            |                                  |
+| `/v1/*` business logic     | `apps/api`                            | Prisma, permissions, `school_id` |
+| File uploads (signed URLs) | API coordinates with Supabase Storage |                                  |
+| AI orchestration           | `apps/api` (+ workers)                | Calls OpenClaw and/or Anthropic  |
+
+### 15.4 Future mobile
+
+- Mobile **only** ships `NEXT_PUBLIC_API_URL` (or `EXPO_PUBLIC_API_URL`) pointing at the same Railway (or other) API.
+- Supabase client on mobile optional for realtime; still enforce **RLS** and validate **school_id** on API for sensitive writes.
+
+---
+
+## 16. OPENCLAW — HOW IT FITS THIS PROJECT
+
+### 16.1 What runs where
+
+| Component            | Host                                                      | Purpose                                                              |
+| -------------------- | --------------------------------------------------------- | -------------------------------------------------------------------- |
+| **OpenClaw Gateway** | Separate process (VM, Railway second service, or managed) | Agents, runs, sessions, tool invoke, webhooks                        |
+| **`@openclaw/sdk`**  | `apps/api` (Node)                                         | Create sessions, start runs, stream events, approvals                |
+| **Plugins / tools**  | Registered on Gateway                                     | Tools call back into Express via **internal** HTTP with service auth |
+
+### 16.2 Typical flow (e.g. Exam Paper Agent)
+
+1. Coordinator clicks “Generate” in **Next.js** → `POST /v1/exams/generate-paper` on **Express**.
+2. Express validates permission, loads syllabus rows from Prisma.
+3. Express calls OpenClaw: `agents` / `runs.create` with payload (grade, subject, chapters).
+4. OpenClaw run executes tools (e.g. `fetch_syllabus`, `save_exam_draft`) that **HTTP POST** to internal API routes with `X-Internal-Key`.
+5. Express saves `ExamPaper`, returns id to UI; UI can subscribe to run events via **SSE/WebSocket** from API that proxies OpenClaw `runs.events`.
+
+### 16.3 Security
+
+- Gateway **token** only on API and job workers; rotate independently.
+- Tool callbacks: **mTLS or HMAC-signed** requests from Gateway to API; reject unauthenticated callbacks.
+- Map OpenClaw scopes to least privilege (`agent.run`, `session.read`, etc.) per [OpenClaw SDK security model](https://docs.openclaw.ai/reference/openclaw-sdk-api-design).
+
+### 16.4 Repo folder `services/openclaw/`
+
+- Store **non-secret** config: agent JSON, tool manifests, webhook route map, runbooks.
+- **Secrets** stay in `.env` on API host only.
+
+### 16.5 Build order note
+
+- Wire OpenClaw after **M01 Auth** and first **Express** routes stable; pilot with **one** agent (e.g. Alert / Content Review) before Exam Paper complexity.
+
+---
+
+## HOW TO USE THIS FILE IN CURSOR
+
+When starting any new module, begin your Cursor prompt with:
+
+```
+"Read AI_CAMBRIDGE_SCHOOL_CONTEXT.md completely.
+Now build [MODULE NAME] following all rules defined there.
+Specifically: [your specific instructions for this module]"
+```
+
+This file is your contract. Every feature must align with it.
+If something is unclear — ask before coding.
