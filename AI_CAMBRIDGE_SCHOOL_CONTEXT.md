@@ -2464,6 +2464,26 @@ WhatsApp Cloud API → apps/api webhook (/v1/webhooks/whatsapp)
 
 ---
 
+## 17. MVP FAST PATH — WORKING LOOP WITHOUT WAITING FOR FULL ERP
+
+The full specification is **large** (many months for a small team). To **ship something real quickly**:
+
+**In the repo today (MVP slice):**
+
+- `packages/database` — Prisma models: **School**, **User**, **Student** (same `Role` enum as Section 5; expand later from Section 6).
+- `apps/api` — `GET/POST /v1/schools`, `GET /v1/schools/:id/students`, `POST /v1/students`, `GET /v1/health` (includes DB ping).
+- `apps/web` — home page lists schools and **create school** form (calls API).
+
+**Local steps:**
+
+1. Add `DATABASE_URL` (Supabase Postgres) to **repo root** `.env` or `.env.local` (API loads `../../.env.local` from `apps/api`).
+2. `npm run db:push` (or `prisma migrate dev` when you want migration history).
+3. `npm run api` (port 4000) and `npm run web` (port 3000); set `NEXT_PUBLIC_API_URL=http://localhost:4000`.
+
+**Then** add fees, diary, WhatsApp, OpenClaw **on this same API** so **mobile** can reuse `/v1/*` later.
+
+---
+
 ## HOW TO USE THIS FILE IN CURSOR
 
 When starting any new module, begin your Cursor prompt with:

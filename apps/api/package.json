@@ -10,9 +10,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-cambridge-school/database": "*",
     "@ai-cambridge-school/types": "*",
     "@ai-cambridge-school/validators": "*",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
     "express": "^4.21.2"
   },
   "devDependencies": {

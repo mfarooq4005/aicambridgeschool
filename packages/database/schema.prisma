@@ -1,4 +1,4 @@
-// Full schema definitions: see AI_CAMBRIDGE_SCHOOL_CONTEXT.md Section 6
+// MVP subset — full models: AI_CAMBRIDGE_SCHOOL_CONTEXT.md Section 6
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,7 +8,63 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-/// Placeholder until Section 6 models are migrated into this file.
-model SchemaPlaceholder {
-  id String @id @default(cuid())
+enum Role {
+  SUPER_ADMIN
+  SCHOOL_ADMIN
+  PRINCIPAL
+  VICE_PRINCIPAL
+  COORDINATOR
+  CLASS_TEACHER
+  SUBJECT_TEACHER
+  ACCOUNTANT
+  LIBRARIAN
+  TRANSPORT_MANAGER
+  STUDENT
+  PARENT
+}
+
+model School {
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique
+  city       String   @default("Karachi")
+  province   String   @default("SINDH")
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  users    User[]
+  students Student[]
+}
+
+model User {
+  id          String   @id @default(cuid())
+  school_id   String
+  phone       String
+  email       String?
+  role        Role
+  full_name   String
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  school  School   @relation(fields: [school_id], references: [id])
+  student Student?
+
+  @@unique([school_id, phone])
+  @@index([school_id, role])
+}
+
+model Student {
+  id            String @id @default(cuid())
+  user_id       String @unique
+  school_id     String
+  admission_no  String @unique
+  grade_label   String
+  section_label String?
+
+  user   User   @relation(fields: [user_id], references: [id])
+  school School @relation(fields: [school_id], references: [id])
+
+  @@index([school_id])
 }

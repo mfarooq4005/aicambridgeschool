@@ -13,6 +13,8 @@
     "api": "npm run dev --workspace=api",
     "api:build": "npm run build --workspace=api",
     "api:start": "npm run start --workspace=api",
+    "db:generate": "npm run generate --workspace=@ai-cambridge-school/database",
+    "db:push": "npm run db:push --workspace=@ai-cambridge-school/database",
     "lint": "npm run lint --workspaces --if-present",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,css,md}\"",
     "prepare": "husky"
