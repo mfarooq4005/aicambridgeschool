@@ -1,0 +1,14 @@
+// Full schema definitions: see AI_CAMBRIDGE_SCHOOL_CONTEXT.md Section 6
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Placeholder until Section 6 models are migrated into this file.
+model SchemaPlaceholder {
+  id String @id @default(cuid())
+}
