@@ -36,3 +36,6 @@ packages/database/.env
 
 # Testing
 coverage/
+
+# Local migration CSVs (may contain PII)
+migration-data/
